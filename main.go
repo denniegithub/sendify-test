@@ -59,11 +59,8 @@ func (w WeightClass) price() float32 {
 // contains map corresponding regions/ISO alpha codes
 var countries map[string]string
 
-type Shipment struct {
-	Sender   string  `json:"sender"`
-	Receiver string  `json:"receiver"`
-	Weight   float32 `json:"weight"`
-}
+// database
+var dao DAO
 
 func main() {
 
@@ -73,10 +70,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// remember to close the file at the end of the program
 	defer f.Close()
 
-	// read csv values using csv.Reader
 	csvReader := csv.NewReader(f)
 	data, err := csvReader.ReadAll()
 	if err != nil {
@@ -86,10 +81,23 @@ func main() {
 	// init countries map
 	countries = createCountriesMap(data)
 
+	// use in memory db. we can exchange this for a real db such as Postgres for example
+	dao = initDB()
+
+	// add /shipments endpoint
 	r := chi.NewRouter()
 	r.Post("/shipments", createShipment)
+	r.Get("/shipments", listShipments)
 	http.ListenAndServe(":8080", r)
 
+}
+
+func listShipments(w http.ResponseWriter, r *http.Request) {
+
+	customerId := r.URL.Query().Get("customerId")
+	shipments := dao.ListShipmentsByCustomer(customerId)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(shipments)
 }
 
 func createShipment(w http.ResponseWriter, r *http.Request) {
@@ -102,13 +110,22 @@ func createShipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if shipment.CustomerId == "" {
+		http.Error(w, "missing customerId", http.StatusBadRequest)
+		return
+	}
+
 	price, err := shipment.calculatePrice()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	w.Write([]byte(fmt.Sprintf("price: %d kr", int(*price))))
+	shipment.Price = *price
+	dao.CreateShipment(&shipment)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(shipment)
 }
 
 func (shipment *Shipment) calculatePrice() (*float32, error) {
